@@ -138,3 +138,40 @@ def stylometric_signal(text: str) -> dict:
         },
         "reliable": word_count >= 50,  # flags short-text unreliability per planning.md
     }
+
+
+# --- Stretch: Ensemble detection, 3rd signal ---
+# Common stock phrases/hedges that LLMs reach for disproportionately often.
+# This is a lexical-pattern signal — distinct from Signal 1 (holistic semantic
+# judgment) and Signal 2 (structural/statistical) because it's a targeted
+# keyword/phrase match, not a learned judgment or a statistical distribution.
+_AI_CLICHE_PHRASES = [
+    "it is important to note", "it's important to note", "in conclusion",
+    "furthermore", "moreover", "on the other hand", "in today's world",
+    "in today's society", "plays a crucial role", "plays a vital role",
+    "it is worth noting", "delve into", "in the realm of", "landscape of",
+    "navigate the complexities", "as an ai language model", "paradigm shift",
+    "in summary", "overall, it is clear", "underscores the importance",
+    "fosters a", "a testament to", "boasts a", "seamlessly",
+]
+
+
+def ai_phrase_signal(text: str) -> dict:
+    """
+    Counts AI-cliche phrase hits per 100 words, normalized to 0-1.
+    Blind spot: easily defeated by paraphrasing; also produces false
+    positives on formal human writing that happens to use these phrases
+    naturally (academic/business writing).
+    """
+    lower = text.lower()
+    words = re.findall(r"[A-Za-z']+", text)
+    word_count = max(len(words), 1)
+
+    hits = sum(lower.count(phrase) for phrase in _AI_CLICHE_PHRASES)
+    hits_per_100_words = (hits / word_count) * 100
+
+    # 0 hits/100w -> 0.1 (mildly human-leaning baseline)
+    # 1+ hit/100w -> climbs toward 1.0
+    score = min(1.0, 0.1 + hits_per_100_words * 0.45)
+
+    return {"score": round(score, 3), "phrase_hits": hits}

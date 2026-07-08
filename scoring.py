@@ -42,6 +42,31 @@ def combine_scores(llm_score: float, stylometric_score: float) -> float:
     return round(max(0.0, min(1.0, raw)), 3)
 
 
+def combine_scores_ensemble(llm_score: float, stylometric_score: float, phrase_score: float) -> float:
+    """
+    Stretch: ensemble detection across 3 signals.
+
+    Weights: LLM 0.5, stylometric 0.3, phrase-pattern 0.2. LLM keeps the
+    largest weight as the most holistic signal; stylometric second since
+    it's a broad statistical signature; phrase-pattern lowest since it's
+    the easiest to evade (paraphrasing defeats it) and most prone to
+    false positives on formal human writing.
+
+    Voting cross-check: each signal casts an informal "vote" (ai / human /
+    neutral) based on its own value crossing 0.7 / 0.3. If the weighted
+    score disagrees with what 2+ signals voted, that's treated as spread
+    (see below) and the score is pulled toward 0.5 rather than trusted.
+    """
+    raw = 0.5 * llm_score + 0.3 * stylometric_score + 0.2 * phrase_score
+
+    scores = [llm_score, stylometric_score, phrase_score]
+    spread = max(scores) - min(scores)
+    if spread > 0.5:
+        raw = raw + (0.5 - raw) * 0.3
+
+    return round(max(0.0, min(1.0, raw)), 3)
+
+
 def get_attribution(confidence: float) -> str:
     if confidence >= AI_THRESHOLD:
         return "likely_ai"

@@ -32,6 +32,13 @@ def init_db():
             text_excerpt TEXT
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS certificates (
+            creator_id TEXT PRIMARY KEY,
+            issued_at TEXT NOT NULL,
+            basis TEXT NOT NULL
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -92,3 +99,71 @@ def get_log(limit=50):
     ).fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+
+# --- Stretch: Provenance Certificate ("Verified Human") ---
+
+CERT_MIN_SUBMISSIONS = 2       # min prior classifications required
+CERT_CONFIDENCE_CEILING = 0.20  # all must score at/below this (confidently human)
+
+
+def eligibility_check(creator_id):
+    """
+    Returns (eligible: bool, reason: str, qualifying_count: int).
+    A creator qualifies by having at least CERT_MIN_SUBMISSIONS prior
+    classifications that all scored confidently human (<= ceiling), with
+    no appeal currently open against any of them.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute("""
+        SELECT confidence, status FROM audit_log
+        WHERE creator_id = ? AND event_type = 'classification'
+    """, (creator_id,)).fetchall()
+    conn.close()
+
+    if len(rows) < CERT_MIN_SUBMISSIONS:
+        return False, f"needs at least {CERT_MIN_SUBMISSIONS} submissions, has {len(rows)}", len(rows)
+
+    qualifying = [r for r in rows if r["confidence"] is not None
+                  and r["confidence"] <= CERT_CONFIDENCE_CEILING
+                  and r["status"] != "under_review"]
+
+    if len(qualifying) < CERT_MIN_SUBMISSIONS:
+        return False, (
+            f"needs at least {CERT_MIN_SUBMISSIONS} submissions scoring "
+            f"<= {CERT_CONFIDENCE_CEILING} confidence with no open appeal; "
+            f"currently has {len(qualifying)}"
+        ), len(qualifying)
+
+    return True, "eligible", len(qualifying)
+
+
+def issue_certificate(creator_id, basis):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("""
+        INSERT INTO certificates (creator_id, issued_at, basis)
+        VALUES (?, ?, ?)
+        ON CONFLICT(creator_id) DO UPDATE SET issued_at=excluded.issued_at, basis=excluded.basis
+    """, (creator_id, datetime.now(timezone.utc).isoformat(), basis))
+    conn.commit()
+    conn.close()
+
+
+def has_certificate(creator_id):
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute(
+        "SELECT 1 FROM certificates WHERE creator_id = ?", (creator_id,)
+    ).fetchone()
+    conn.close()
+    return row is not None
+
+
+def get_certificate(creator_id):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT * FROM certificates WHERE creator_id = ?", (creator_id,)
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
