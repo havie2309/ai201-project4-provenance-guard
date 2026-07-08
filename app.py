@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 
 import storage
 import signals
+import scoring
 
 load_dotenv()
 storage.init_db()
@@ -23,36 +24,37 @@ def submit():
 
     content_id = str(uuid.uuid4())
 
-    # --- Milestone 3: only signal 1 is wired in. Confidence/label are placeholders
-    # until Milestone 4 adds signal 2 and real scoring. ---
+    # --- Both signals now wired in ---
     llm_result = signals.llm_signal(text)
     llm_score = llm_result["score"]
 
-    placeholder_confidence = llm_score
-    if placeholder_confidence >= 0.7:
-        attribution = "likely_ai"
-    elif placeholder_confidence <= 0.35:
-        attribution = "likely_human"
-    else:
-        attribution = "uncertain"
-    placeholder_label = f"[placeholder label — real label lands in Milestone 5] attribution={attribution}"
+    stylo_result = signals.stylometric_signal(text)
+    stylometric_score = stylo_result["score"]
+
+    confidence = scoring.combine_scores(llm_score, stylometric_score)
+    attribution = scoring.get_attribution(confidence)
+    label = scoring.get_label(confidence)
 
     storage.log_classification(
         content_id=content_id,
         creator_id=creator_id,
         text=text,
         attribution=attribution,
-        confidence=placeholder_confidence,
+        confidence=confidence,
         llm_score=llm_score,
-        stylometric_score=None,  # added in Milestone 4
-        label=placeholder_label,
+        stylometric_score=stylometric_score,
+        label=label,
     )
 
     return jsonify({
         "content_id": content_id,
         "attribution": attribution,
-        "confidence": placeholder_confidence,
-        "label": placeholder_label,
+        "confidence": confidence,
+        "label": label,
+        "signals": {
+            "llm_score": llm_score,
+            "stylometric_score": stylometric_score,
+        },
     })
 
 

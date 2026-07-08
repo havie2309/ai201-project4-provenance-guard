@@ -1,12 +1,14 @@
 """
 signals.py — detection signals for Provenance Guard.
 
-Signal 1 (this milestone): LLM-based semantic/stylistic assessment via Groq.
-Signal 2 (Milestone 4): stylometric heuristics.
+Signal 1: LLM-based semantic/stylistic assessment via Groq.
+Signal 2: stylometric heuristics (structural, independent of Signal 1).
 """
 
 import os
+import re
 import json
+import statistics
 from groq import Groq
 
 _client = None
@@ -63,3 +65,76 @@ Text to assess:
         rationale = "Could not parse model response; defaulted to neutral."
 
     return {"score": score, "rationale": rationale}
+
+
+def stylometric_signal(text: str) -> dict:
+    """
+    Pure-Python structural signal. Combines three metrics into one 0-1
+    "structural AI-likelihood" score:
+      - sentence-length variance (AI text tends toward uniform sentence length)
+      - type-token ratio / vocabulary diversity (AI text is often less varied)
+      - punctuation density (AI text tends toward regular, sparse punctuation)
+
+    Each metric is normalized to 0-1 independently, then averaged.
+    Unreliable on very short text (<~50 words) — see planning.md edge cases.
+    """
+    sentences = [s.strip() for s in re.split(r'[.!?]+', text) if s.strip()]
+    words = re.findall(r"[A-Za-z']+", text)
+    word_count = len(words)
+
+    # --- Metric 1: sentence-length variance (word count per sentence) ---
+    if len(sentences) >= 2:
+        lengths = [len(re.findall(r"[A-Za-z']+", s)) for s in sentences]
+        lengths = [l for l in lengths if l > 0]
+        if len(lengths) >= 2:
+            variance = statistics.variance(lengths)
+            mean_len = statistics.mean(lengths)
+            # coefficient of variation, scaled — low variance (uniform) -> high AI-likelihood
+            cv = (variance ** 0.5) / mean_len if mean_len > 0 else 0
+            # Human writing typically has cv > ~0.5; AI often < ~0.3.
+            variance_score = max(0.0, min(1.0, 1.0 - (cv / 0.7)))
+        else:
+            variance_score = 0.5
+    else:
+        variance_score = 0.5  # not enough sentences to judge
+
+    # --- Metric 2: type-token ratio (vocabulary diversity) ---
+    if word_count >= 10:
+        unique_words = set(w.lower() for w in words)
+        ttr = len(unique_words) / word_count
+        # Human writing tends toward higher TTR on short-medium texts;
+        # AI text often clusters in a moderate, consistent band (~0.4-0.6).
+        # Score high (AI-like) when TTR falls in that narrow moderate band.
+        if 0.35 <= ttr <= 0.6:
+            ttr_score = 0.7
+        elif ttr > 0.6:
+            ttr_score = 0.2  # high diversity -> more human-like
+        else:
+            ttr_score = 0.4  # very low diversity -> ambiguous (could be repetitive human text too)
+    else:
+        ttr_score = 0.5  # not enough words to judge
+
+    # --- Metric 3: punctuation density ---
+    punct_count = len(re.findall(r"[,;:\-—()]", text))
+    if word_count > 0:
+        density = punct_count / word_count
+        # AI text tends toward moderate, regular punctuation density (~0.05-0.15).
+        # Very low or very high density skews human (terse texting vs. heavy stylistic punctuation).
+        if 0.05 <= density <= 0.15:
+            punct_score = 0.65
+        else:
+            punct_score = 0.3
+    else:
+        punct_score = 0.5
+
+    structural_score = round((variance_score + ttr_score + punct_score) / 3, 3)
+
+    return {
+        "score": structural_score,
+        "components": {
+            "sentence_variance_score": round(variance_score, 3),
+            "type_token_ratio_score": round(ttr_score, 3),
+            "punctuation_density_score": round(punct_score, 3),
+        },
+        "reliable": word_count >= 50,  # flags short-text unreliability per planning.md
+    }
